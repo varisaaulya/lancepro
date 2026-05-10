@@ -1,0 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "DM Serif Display", serif;
+  
+  --color-burgundy: #6B1A2A;
+  --color-burgundy-light: #8E2338;
+  --color-burgundy-dark: #4D121E;
+  
+  --color-gray-soft: #F2F2F7;
+  --color-gray-muted: #8E8E93;
+  --color-gray-dark: #3A3A3C;
+  
+  --shadow-tight: 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-medium: 0 4px 6px rgba(0,0,0,0.05);
+}
+
+@layer base {
+  body {
+    @apply bg-gray-soft text-gray-dark font-sans antialiased;
+  }
+  
+  h1, h2, h3, .serif {
+    @apply font-serif;
+  }
+}
+
+.bg-burgundy-gradient {
+  background: linear-gradient(135deg, #6B1A2A 0%, #4D121E 100%);
+}
+
+.sidebar-link-shadow {
+  background-color: rgba(255,255,255,0.15);
+  border-left: 4px solid white;
+}
+
+
