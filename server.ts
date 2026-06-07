@@ -304,6 +304,28 @@ async function startServer() {
     }
   });
 
+  app.put('/api/invoices/:id/status', authenticate, async (req: any, res) => {
+    const { status } = req.body;
+    try {
+      await db.prepare('UPDATE invoices SET status = ? WHERE id = ? AND user_id = ?').run(status, req.params.id, req.user.id);
+      await activityLog(req.user.id, 'Update Invoice', `Mengubah status invoice ID: ${req.params.id} menjadi ${status}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.delete('/api/invoices/:id', authenticate, async (req: any, res) => {
+    try {
+      await db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(req.params.id);
+      await db.prepare('DELETE FROM invoices WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+      await activityLog(req.user.id, 'Hapus Invoice', `Menghapus invoice ID: ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
   // --- Gallery ---
   app.get('/api/gallery', authenticate, async (req: any, res) => {
     try {

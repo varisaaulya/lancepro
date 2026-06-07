@@ -111,10 +111,52 @@ export default function Finance() {
     }
   };
 
+  const handleStatusChange = async (id: number, status: string) => {
+    try {
+      const res = await fetch(`/api/invoices/${id}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Status invoice berhasil diubah menjadi ${status}`);
+        fetchData();
+      } else {
+        toast.error(data.message || 'Gagal mengubah status');
+      }
+    } catch (err) {
+      toast.error('Gagal menghubungi server');
+    }
+  };
+
+  const handleDeleteInvoice = async (id: number) => {
+    if (!window.confirm('Apakah Anda yakin ingin menghapus invoice ini?')) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/invoices/${id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Invoice berhasil dihapus');
+        fetchData();
+      } else {
+        toast.error(data.message || 'Gagal menghapus invoice');
+      }
+    } catch (err) {
+      toast.error('Gagal menghubungi server');
+    }
+  };
+
   const stats = {
     totalRevenue: invoices.filter(i => i.status === 'Lunas').reduce((sum, i) => sum + i.total, 0),
     unpaid: invoices.filter(i => i.status === 'Belum Dibayar').reduce((sum, i) => sum + i.total, 0),
     overdue: invoices.filter(i => i.status === 'Jatuh Tempo').reduce((sum, i) => sum + i.total, 0),
+    paidCount: invoices.filter(i => i.status === 'Lunas').length,
     count: invoices.length
   };
 
@@ -133,7 +175,7 @@ export default function Finance() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard label="Total Pendapatan" value={formatCurrency(stats.totalRevenue)} icon={<TrendingUp className="text-green-500" />} />
         <StatCard label="Tagihan Tertunda" value={formatCurrency(stats.unpaid)} icon={<AlertCircle className="text-orange-500" />} />
-        <StatCard label="Sudah Dibayar" value={stats.count} icon={<CheckCircle2 className="text-blue-500" />} desc="Invoice Lunas" />
+        <StatCard label="Sudah Dibayar" value={stats.paidCount} icon={<CheckCircle2 className="text-blue-500" />} desc="Invoice Lunas" />
         <StatCard label="Jatuh Tempo" value={formatCurrency(stats.overdue)} icon={<FileText className="text-red-500" />} />
       </div>
 
@@ -164,18 +206,25 @@ export default function Finance() {
                   <td className="px-6 py-4 font-semibold">{formatCurrency(inv.total)}</td>
                   <td className="px-6 py-4 text-sm">{formatDate(inv.tanggal_jatuh_tempo)}</td>
                   <td className="px-6 py-4">
-                    <span className={cn(
-                      "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
-                      inv.status === 'Lunas' ? "bg-green-100 text-green-700" :
-                      inv.status === 'Jatuh Tempo' ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"
-                    )}>
-                      {inv.status}
-                    </span>
+                    <select
+                      value={inv.status}
+                      onChange={(e) => handleStatusChange(inv.id, e.target.value)}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs font-bold uppercase cursor-pointer border border-transparent outline-none focus:ring-2 focus:ring-burgundy/20 transition-all",
+                        inv.status === 'Lunas' ? "bg-green-100 text-green-700 hover:bg-green-200" :
+                        inv.status === 'Jatuh Tempo' ? "bg-red-100 text-red-700 hover:bg-red-200" : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+                      )}
+                    >
+                      <option value="Belum Dibayar" className="bg-white text-gray-800">Belum Dibayar</option>
+                      <option value="Lunas" className="bg-white text-gray-800">Lunas</option>
+                      <option value="Jatuh Tempo" className="bg-white text-gray-800">Jatuh Tempo</option>
+                    </select>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex gap-2">
-                       <button title="Kirim Pengingat" onClick={() => toast.success('Pengingat dikirim ke klien!')} className="p-1 hover:text-burgundy"><Send size={16} /></button>
-                       <button title="Print / PDF" onClick={() => window.print()} className="p-1 hover:text-gray-900"><Download size={16} /></button>
+                       <button title="Kirim Pengingat" onClick={() => toast.success('Pengingat dikirim ke klien!')} className="p-1 hover:text-burgundy transition-colors"><Send size={16} /></button>
+                       <button title="Print / PDF" onClick={() => window.print()} className="p-1 hover:text-gray-900 transition-colors"><Download size={16} /></button>
+                       <button title="Hapus Invoice" onClick={() => handleDeleteInvoice(inv.id)} className="p-1 text-red-500 hover:text-red-700 transition-colors"><Trash2 size={16} /></button>
                     </div>
                   </td>
                 </tr>
