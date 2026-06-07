@@ -3,10 +3,18 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 
-const isMySQL = !!(process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE);
+let isMySQL = !!(process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE);
 
 let sqliteDb: any = null;
 let mysqlPool: any = null;
+
+function getSqliteDb() {
+  if (!sqliteDb) {
+    const dbPath = path.join(process.cwd(), 'lancepro.db');
+    sqliteDb = new Database(dbPath);
+  }
+  return sqliteDb;
+}
 
 if (isMySQL) {
   console.log('=== Connecting to MySQL Database ===');
@@ -24,12 +32,11 @@ if (isMySQL) {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    multipleStatements: true
+    multipleStatements: true,
+    connectTimeout: 5000 // fail fast within 5s
   });
 } else {
-  console.log('=== Connecting to SQLite Database ===');
-  const dbPath = path.join(process.cwd(), 'lancepro.db');
-  sqliteDb = new Database(dbPath);
+  getSqliteDb();
 }
 
 // Translate SQLite schema SQL to MySQL compatible format
@@ -59,14 +66,16 @@ function translateQueryForMySQL(sql: string): string {
 }
 
 export const db = {
-  isMySQL,
+  get isMySQL(): boolean {
+    return isMySQL;
+  },
   
   async exec(sql: string): Promise<void> {
     if (isMySQL) {
       const translated = translateSchemaForMySQL(sql);
       await mysqlPool.query(translated);
     } else {
-      sqliteDb.exec(sql);
+      getSqliteDb().exec(sql);
     }
   },
   
@@ -81,7 +90,7 @@ export const db = {
             changes: (result as any).affectedRows || 0
           };
         } else {
-          const stmt = sqliteDb.prepare(sql);
+          const stmt = getSqliteDb().prepare(sql);
           const info = stmt.run(...params);
           return {
             lastInsertRowid: Number(info.lastInsertRowid),
@@ -96,7 +105,7 @@ export const db = {
           const [rows] = await mysqlPool.execute(translated, params);
           return (rows as any)[0] || null;
         } else {
-          return sqliteDb.prepare(sql).get(...params);
+          return getSqliteDb().prepare(sql).get(...params);
         }
       },
       
@@ -106,7 +115,7 @@ export const db = {
           const [rows] = await mysqlPool.execute(translated, params);
           return rows as any[];
         } else {
-          return sqliteDb.prepare(sql).all(...params);
+          return getSqliteDb().prepare(sql).all(...params);
         }
       }
     };
@@ -114,7 +123,22 @@ export const db = {
 };
 
 export async function initDb() {
-  console.log('Initializing Database schemas...');
+  if (isMySQL && mysqlPool) {
+    try {
+      console.log('Testing MySQL Connection...');
+      const connection = await mysqlPool.getConnection();
+      connection.release();
+      console.log('MySQL Connection successful!');
+    } catch (err: any) {
+      console.error('MySQL Connection failed. Falling back to SQLite database. Error detail:', err.message);
+      isMySQL = false;
+      try {
+        await mysqlPool.end();
+      } catch (e) {}
+    }
+  }
+
+  console.log(`Initializing Database schemas (${isMySQL ? 'MySQL' : 'SQLite'})...`);
   
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
