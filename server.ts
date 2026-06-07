@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import db from './src/db.js';
+import db, { initDb } from './src/db.js';
 import { seedData } from './src/seed.js';
 
 const __dirname = path.resolve();
@@ -16,8 +16,13 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Run database seeds
-  seedData();
+  // Initialize DB schemas & run database seeds asynchronously
+  try {
+    await initDb();
+    await seedData();
+  } catch (error) {
+    console.error('Database Initialization or Seeding failed:', error);
+  }
 
   app.use(cors({
     origin: true,
@@ -46,9 +51,9 @@ async function startServer() {
     }
   };
 
-  const activityLog = (user_id: number, aksi: string, keterangan: string) => {
+  const activityLog = async (user_id: number, aksi: string, keterangan: string) => {
     try {
-      db.prepare('INSERT INTO activity_log (user_id, aksi, keterangan) VALUES (?, ?, ?)')
+      await db.prepare('INSERT INTO activity_log (user_id, aksi, keterangan) VALUES (?, ?, ?)')
         .run(user_id, aksi, keterangan);
     } catch (e) {
       console.error('Log error:', e);
@@ -65,18 +70,18 @@ async function startServer() {
   const upload = multer({ storage });
 
   // --- Auth Routes ---
-  app.post('/api/auth/register', (req, res) => {
+  app.post('/api/auth/register', async (req, res) => {
     const { nama, email, password } = req.body;
     if (!nama || !email || !password || password.length < 8) {
       return res.status(400).json({ success: false, message: 'Validasi gagal' });
     }
 
     try {
-      const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+      const exists = await db.prepare('SELECT id FROM users WHERE email = ?').get(email);
       if (exists) return res.status(400).json({ success: false, message: 'Email sudah terdaftar' });
 
       const hash = bcrypt.hashSync(password, 10);
-      const result = db.prepare('INSERT INTO users (nama, email, password) VALUES (?, ?, ?)')
+      const result = await db.prepare('INSERT INTO users (nama, email, password) VALUES (?, ?, ?)')
         .run(nama, email, hash);
       
       res.json({ success: true, message: 'Registrasi berhasil' });
@@ -85,10 +90,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     const { email, password, remember } = req.body;
     try {
-      const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+      const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
       if (!user || !bcrypt.compareSync(password, user.password)) {
         return res.status(401).json({ success: false, message: 'Email atau password salah' });
       }
@@ -105,7 +110,7 @@ async function startServer() {
         maxAge: remember ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
       });
 
-      activityLog(user.id, 'Login', 'User melakukan login ke sistem');
+      await activityLog(user.id, 'Login', 'User melakukan login ke sistem');
       res.json({ success: true, data: { id: user.id, nama: user.nama, role: user.role } });
     } catch (e: any) {
       res.status(500).json({ success: false, message: e.message });
@@ -117,28 +122,32 @@ async function startServer() {
     res.json({ success: true, message: 'Logout berhasil' });
   });
 
-  app.get('/api/auth/me', authenticate, (req: any, res) => {
-    const user = db.prepare('SELECT id, nama, email, profesi, bio, telepon, foto, role, tarif_per_jam FROM users WHERE id = ?').get(req.user.id);
-    res.json({ success: true, data: user });
+  app.get('/api/auth/me', authenticate, async (req: any, res) => {
+    try {
+      const user = await db.prepare('SELECT id, nama, email, profesi, bio, telepon, foto, role, tarif_per_jam FROM users WHERE id = ?').get(req.user.id);
+      res.json({ success: true, data: user });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
   // --- Dashboard Stats ---
-  app.get('/api/dashboard/stats', authenticate, (req: any, res) => {
+  app.get('/api/dashboard/stats', authenticate, async (req: any, res) => {
     const userId = req.user.id;
     console.log('Fetching dashboard stats for user:', userId);
     try {
-      const activeProjects = db.prepare("SELECT COUNT(*) as count FROM projects WHERE user_id = ? AND status != 'Selesai'").get(userId) as any;
-      const monthlyIncome = db.prepare("SELECT SUM(total) as sum FROM invoices WHERE user_id = ? AND status = 'Lunas' AND strftime('%m', created_at) = strftime('%m', 'now')").get(userId) as any;
-      const unpaidInvoices = db.prepare("SELECT COUNT(*) as count FROM invoices WHERE user_id = ? AND status != 'Lunas'").get(userId) as any;
-      const upcomingDeadlines = db.prepare("SELECT COUNT(*) as count FROM projects WHERE user_id = ? AND deadline >= date('now') AND deadline <= date('now', '+7 days')").get(userId) as any;
-      const revenueHistory = db.prepare(`
+      const activeProjects = await db.prepare("SELECT COUNT(*) as count FROM projects WHERE user_id = ? AND status != 'Selesai'").get(userId) as any;
+      const monthlyIncome = await db.prepare("SELECT SUM(total) as sum FROM invoices WHERE user_id = ? AND status = 'Lunas' AND strftime('%m', created_at) = strftime('%m', 'now')").get(userId) as any;
+      const unpaidInvoices = await db.prepare("SELECT COUNT(*) as count FROM invoices WHERE user_id = ? AND status != 'Lunas'").get(userId) as any;
+      const upcomingDeadlines = await db.prepare("SELECT COUNT(*) as count FROM projects WHERE user_id = ? AND deadline >= date('now') AND deadline <= date('now', '+7 days')").get(userId) as any;
+      const revenueHistory = await db.prepare(`
         SELECT strftime('%Y-%m', created_at) as month, SUM(total) as total 
         FROM invoices WHERE user_id = ? AND status = 'Lunas' 
         GROUP BY month ORDER BY month DESC LIMIT 6
       `).all(userId);
-      const statusDistribution = db.prepare("SELECT status, COUNT(*) as count FROM projects WHERE user_id = ? GROUP BY status").all(userId);
-      const recentProjects = db.prepare("SELECT p.*, c.nama as client_name FROM projects p JOIN clients c ON p.client_id = c.id WHERE p.user_id = ? ORDER BY p.created_at DESC LIMIT 5").all(userId);
-      const activities = db.prepare("SELECT * FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 10").all(userId);
+      const statusDistribution = await db.prepare("SELECT status, COUNT(*) as count FROM projects WHERE user_id = ? GROUP BY status").all(userId);
+      const recentProjects = await db.prepare("SELECT p.*, c.nama as client_name FROM projects p JOIN clients c ON p.client_id = c.id WHERE p.user_id = ? ORDER BY p.created_at DESC LIMIT 5").all(userId);
+      const activities = await db.prepare("SELECT * FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 10").all(userId);
 
       const stats = {
         activeProjects: activeProjects || { count: 0 },
@@ -160,159 +169,219 @@ async function startServer() {
   });
 
   // --- Projects CRUD ---
-  app.get('/api/projects', authenticate, (req: any, res) => {
-    const projects = db.prepare("SELECT p.*, c.nama as client_name FROM projects p JOIN clients c ON p.client_id = c.id WHERE p.user_id = ?").all(req.user.id);
-    res.json({ success: true, data: projects });
+  app.get('/api/projects', authenticate, async (req: any, res) => {
+    try {
+      const projects = await db.prepare("SELECT p.*, c.nama as client_name FROM projects p JOIN clients c ON p.client_id = c.id WHERE p.user_id = ?").all(req.user.id);
+      res.json({ success: true, data: projects });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.post('/api/projects', authenticate, (req: any, res) => {
+  app.post('/api/projects', authenticate, async (req: any, res) => {
     const { client_id, nama, deskripsi, kategori, nilai_kontrak, status, prioritas, progress, tanggal_mulai, deadline } = req.body;
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         INSERT INTO projects (user_id, client_id, nama, deskripsi, kategori, nilai_kontrak, status, prioritas, progress, tanggal_mulai, deadline)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(req.user.id, client_id, nama, deskripsi, kategori, nilai_kontrak, status, prioritas, progress, tanggal_mulai, deadline);
       
-      activityLog(req.user.id, 'Tambah Proyek', `Menambah proyek: ${nama}`);
+      await activityLog(req.user.id, 'Tambah Proyek', `Menambah proyek: ${nama}`);
       res.json({ success: true, data: { id: result.lastInsertRowid } });
     } catch (e: any) {
       res.status(500).json({ success: false, message: e.message });
     }
   });
 
-  app.put('/api/projects/:id', authenticate, (req: any, res) => {
+  app.put('/api/projects/:id', authenticate, async (req: any, res) => {
     const { nama, deskripsi, kategori, nilai_kontrak, status, prioritas, progress, tanggal_mulai, deadline } = req.body;
-    db.prepare(`
-      UPDATE projects SET nama = ?, deskripsi = ?, kategori = ?, nilai_kontrak = ?, status = ?, prioritas = ?, progress = ?, tanggal_mulai = ?, deadline = ?
-      WHERE id = ? AND user_id = ?
-    `).run(nama, deskripsi, kategori, nilai_kontrak, status, prioritas, progress, tanggal_mulai, deadline, req.params.id, req.user.id);
-    
-    activityLog(req.user.id, 'Update Proyek', `Mengupdate proyek ID: ${req.params.id}`);
-    res.json({ success: true });
+    try {
+      await db.prepare(`
+        UPDATE projects SET nama = ?, deskripsi = ?, kategori = ?, nilai_kontrak = ?, status = ?, prioritas = ?, progress = ?, tanggal_mulai = ?, deadline = ?
+        WHERE id = ? AND user_id = ?
+      `).run(nama, deskripsi, kategori, nilai_kontrak, status, prioritas, progress, tanggal_mulai, deadline, req.params.id, req.user.id);
+      
+      await activityLog(req.user.id, 'Update Proyek', `Mengupdate proyek ID: ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.delete('/api/projects/:id', authenticate, (req: any, res) => {
-    db.prepare('DELETE FROM projects WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
-    activityLog(req.user.id, 'Hapus Proyek', `Menghapus proyek ID: ${req.params.id}`);
-    res.json({ success: true });
+  app.delete('/api/projects/:id', authenticate, async (req: any, res) => {
+    try {
+      await db.prepare('DELETE FROM projects WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+      await activityLog(req.user.id, 'Hapus Proyek', `Menghapus proyek ID: ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
   // --- Clients CRUD ---
-  app.get('/api/clients', authenticate, (req: any, res) => {
-    const clients = db.prepare("SELECT * FROM clients WHERE user_id = ?").all(req.user.id);
-    res.json({ success: true, data: clients });
+  app.get('/api/clients', authenticate, async (req: any, res) => {
+    try {
+      const clients = await db.prepare("SELECT * FROM clients WHERE user_id = ?").all(req.user.id);
+      res.json({ success: true, data: clients });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.post('/api/clients', authenticate, (req: any, res) => {
+  app.post('/api/clients', authenticate, async (req: any, res) => {
     const { nama, perusahaan, email, telepon, alamat, catatan, status } = req.body;
-    const result = db.prepare(`
-      INSERT INTO clients (user_id, nama, perusahaan, email, telepon, alamat, catatan, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(req.user.id, nama, perusahaan, email, telepon, alamat, catatan, status);
-    
-    activityLog(req.user.id, 'Tambah Klien', `Menambah klien: ${nama}`);
-    res.json({ success: true, data: { id: result.lastInsertRowid } });
+    try {
+      const result = await db.prepare(`
+        INSERT INTO clients (user_id, nama, perusahaan, email, telepon, alamat, catatan, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(req.user.id, nama, perusahaan, email, telepon, alamat, catatan, status);
+      
+      await activityLog(req.user.id, 'Tambah Klien', `Menambah klien: ${nama}`);
+      res.json({ success: true, data: { id: result.lastInsertRowid } });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.put('/api/clients/:id', authenticate, (req: any, res) => {
+  app.put('/api/clients/:id', authenticate, async (req: any, res) => {
     const { nama, perusahaan, email, telepon, alamat, catatan, status } = req.body;
-    db.prepare(`
-      UPDATE clients SET nama = ?, perusahaan = ?, email = ?, telepon = ?, alamat = ?, catatan = ?, status = ?
-      WHERE id = ? AND user_id = ?
-    `).run(nama, perusahaan, email, telepon, alamat, catatan, status, req.params.id, req.user.id);
-    res.json({ success: true });
+    try {
+      await db.prepare(`
+        UPDATE clients SET nama = ?, perusahaan = ?, email = ?, telepon = ?, alamat = ?, catatan = ?, status = ?
+        WHERE id = ? AND user_id = ?
+      `).run(nama, perusahaan, email, telepon, alamat, catatan, status, req.params.id, req.user.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.get('/api/clients/:id', authenticate, (req: any, res) => {
-    const client = db.prepare("SELECT * FROM clients WHERE id = ? AND user_id = ?").get(req.params.id, req.user.id);
-    const projects = db.prepare("SELECT * FROM projects WHERE client_id = ?").all(req.params.id);
-    res.json({ success: true, data: { ...client, projects } });
+  app.get('/api/clients/:id', authenticate, async (req: any, res) => {
+    try {
+      const client = await db.prepare("SELECT * FROM clients WHERE id = ? AND user_id = ?").get(req.params.id, req.user.id);
+      const projects = await db.prepare("SELECT * FROM projects WHERE client_id = ?").all(req.params.id);
+      res.json({ success: true, data: { ...client, projects } });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
   // --- Invoices ---
-  app.get('/api/invoices', authenticate, (req: any, res) => {
-    const invoices = db.prepare(`
-      SELECT i.*, c.nama as client_name, p.nama as project_name 
-      FROM invoices i 
-      JOIN clients c ON i.client_id = c.id 
-      JOIN projects p ON i.project_id = p.id 
-      WHERE i.user_id = ?
-    `).all(req.user.id);
-    res.json({ success: true, data: invoices });
+  app.get('/api/invoices', authenticate, async (req: any, res) => {
+    try {
+      const invoices = await db.prepare(`
+        SELECT i.*, c.nama as client_name, p.nama as project_name 
+        FROM invoices i 
+        JOIN clients c ON i.client_id = c.id 
+        JOIN projects p ON i.project_id = p.id 
+        WHERE i.user_id = ?
+      `).all(req.user.id);
+      res.json({ success: true, data: invoices });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.post('/api/invoices', authenticate, (req: any, res) => {
+  app.post('/api/invoices', authenticate, async (req: any, res) => {
     const { client_id, project_id, nomor_invoice, subtotal, diskon, pajak, total, status, catatan, tanggal_jatuh_tempo, items } = req.body;
-    const result = db.prepare(`
-      INSERT INTO invoices (user_id, client_id, project_id, nomor_invoice, subtotal, diskon, pajak, total, status, catatan, tanggal_jatuh_tempo)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(req.user.id, client_id, project_id, nomor_invoice, subtotal, diskon, pajak, total, status, catatan, tanggal_jatuh_tempo);
-    
-    if (items && Array.isArray(items)) {
-      const stmt = db.prepare('INSERT INTO invoice_items (invoice_id, nama_item, qty, harga_satuan, subtotal) VALUES (?, ?, ?, ?, ?)');
-      items.forEach((item: any) => {
-        stmt.run(result.lastInsertRowid, item.nama, item.qty, item.harga, item.subtotal);
-      });
+    try {
+      const result = await db.prepare(`
+        INSERT INTO invoices (user_id, client_id, project_id, nomor_invoice, subtotal, diskon, pajak, total, status, catatan, tanggal_jatuh_tempo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(req.user.id, client_id, project_id, nomor_invoice, subtotal, diskon, pajak, total, status, catatan, tanggal_jatuh_tempo);
+      
+      if (items && Array.isArray(items)) {
+        const stmt = db.prepare('INSERT INTO invoice_items (invoice_id, nama_item, qty, harga_satuan, subtotal) VALUES (?, ?, ?, ?, ?)');
+        for (const item of items) {
+          await stmt.run(result.lastInsertRowid, item.nama, item.qty, item.harga, item.subtotal);
+        }
+      }
+      
+      await activityLog(req.user.id, 'Buat Invoice', `Membuat invoice: ${nomor_invoice}`);
+      res.json({ success: true, data: { id: result.lastInsertRowid } });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
     }
-    
-    activityLog(req.user.id, 'Buat Invoice', `Membuat invoice: ${nomor_invoice}`);
-    res.json({ success: true, data: { id: result.lastInsertRowid } });
   });
 
   // --- Gallery ---
-  app.get('/api/gallery', authenticate, (req: any, res) => {
-    const items = db.prepare("SELECT * FROM gallery WHERE user_id = ?").all(req.user.id);
-    res.json({ success: true, data: items });
+  app.get('/api/gallery', authenticate, async (req: any, res) => {
+    try {
+      const items = await db.prepare("SELECT * FROM gallery WHERE user_id = ?").all(req.user.id);
+      res.json({ success: true, data: items });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.post('/api/gallery', authenticate, upload.single('gambar'), (req: any, res) => {
+  app.post('/api/gallery', authenticate, upload.single('gambar'), async (req: any, res) => {
     const { judul, deskripsi, kategori, tahun } = req.body;
     const gambar = req.file ? `/uploads/${req.file.filename}` : req.body.gambar;
     
-    const result = db.prepare(`
-      INSERT INTO gallery (user_id, judul, deskripsi, kategori, gambar, tahun)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(req.user.id, judul, deskripsi, kategori, gambar, tahun);
-    
-    res.json({ success: true, data: { id: result.lastInsertRowid } });
+    try {
+      const result = await db.prepare(`
+        INSERT INTO gallery (user_id, judul, deskripsi, kategori, gambar, tahun)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(req.user.id, judul, deskripsi, kategori, gambar, tahun);
+      
+      res.json({ success: true, data: { id: result.lastInsertRowid } });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.delete('/api/gallery/:id', authenticate, (req: any, res) => {
-    db.prepare('DELETE FROM gallery WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
-    res.json({ success: true });
+  app.delete('/api/gallery/:id', authenticate, async (req: any, res) => {
+    try {
+      await db.prepare('DELETE FROM gallery WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
   // --- Profiles ---
-  app.put('/api/profile', authenticate, (req: any, res) => {
+  app.put('/api/profile', authenticate, async (req: any, res) => {
     const { nama, profesi, bio, telepon, tarif_per_jam } = req.body;
-    db.prepare(`
-      UPDATE users SET nama = ?, profesi = ?, bio = ?, telepon = ?, tarif_per_jam = ?
-      WHERE id = ?
-    `).run(nama, profesi, bio, telepon, tarif_per_jam, req.user.id);
-    res.json({ success: true });
+    try {
+      await db.prepare(`
+        UPDATE users SET nama = ?, profesi = ?, bio = ?, telepon = ?, tarif_per_jam = ?
+        WHERE id = ?
+      `).run(nama, profesi, bio, telepon, tarif_per_jam, req.user.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
-  app.put('/api/profile/password', authenticate, (req: any, res) => {
+  app.put('/api/profile/password', authenticate, async (req: any, res) => {
     const { oldPassword, newPassword } = req.body;
-    const user = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id) as any;
-    if (!bcrypt.compareSync(oldPassword, user.password)) {
-      return res.status(400).json({ success: false, message: 'Password lama salah' });
+    try {
+      const user = await db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id) as any;
+      if (!bcrypt.compareSync(oldPassword, user.password)) {
+        return res.status(400).json({ success: false, message: 'Password lama salah' });
+      }
+      const hash = bcrypt.hashSync(newPassword, 10);
+      await db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, req.user.id);
+      res.json({ success: true, message: 'Password berhasil diubah' });
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
     }
-    const hash = bcrypt.hashSync(newPassword, 10);
-    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, req.user.id);
-    res.json({ success: true, message: 'Password berhasil diubah' });
   });
 
   // --- Exports ---
-  app.get('/api/export/projects', authenticate, (req: any, res) => {
-    const projects = db.prepare("SELECT * FROM projects WHERE user_id = ?").all(req.user.id) as any[];
-    let csv = 'ID,Nama,Kategori,Nilai,Status,Progress,Deadline\n';
-    projects.forEach(p => {
-      csv += `${p.id},"${p.nama}",${p.kategori},${p.nilai_kontrak},${p.status},${p.progress}%,${p.deadline}\n`;
-    });
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=projects.csv');
-    res.send(csv);
+  app.get('/api/export/projects', authenticate, async (req: any, res) => {
+    try {
+      const projects = await db.prepare("SELECT * FROM projects WHERE user_id = ?").all(req.user.id) as any[];
+      let csv = 'ID,Nama,Kategori,Nilai,Status,Progress,Deadline\n';
+      projects.forEach(p => {
+        csv += `${p.id},"${p.nama}",${p.kategori},${p.nilai_kontrak},${p.status},${p.progress}%,${p.deadline}\n`;
+      });
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=projects.csv');
+      res.send(csv);
+    } catch (e: any) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
   // Vite middleware for development
